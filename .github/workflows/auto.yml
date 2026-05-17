@@ -2,9 +2,9 @@ name: Robot Amazon Quotidien
 
 on:
   schedule:
-    # Tous les jours à 06:00 UTC (soit 07h00 ou 08h00 en France selon l'heure d'été/hiver)
+    # Tous les jours à 06:00 UTC (soit 07h00 ou 08h00 en France selon la saison)
     - cron: '0 6 * * *'
-  workflow_dispatch: # Permet de lancer le robot à la main en cliquant sur un bouton
+  workflow_dispatch: # Bouton pour le lancer à la main
 
 jobs:
   run-scraper:
@@ -18,10 +18,11 @@ jobs:
       with:
         python-version: '3.10'
 
-    - name: Installer Google Chrome (pour Selenium)
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y google-chrome-stable
+    # SOLUTION : Utilisation de l'outil officiel pour installer Chrome proprement
+    - name: Installer Google Chrome et son Driver automatiquement
+      uses: browser-actions/setup-chrome@v1
+      with:
+        chrome-version: stable
 
     - name: Installer les extensions Python
       run: |
@@ -36,4 +37,4 @@ jobs:
         git config --global user.email 'bot@amazon.com'
         git add *.xlsx
         git commit -m "Mise à jour automatique des Bestsellers" || exit 0
-        git push
+        git push origin main
