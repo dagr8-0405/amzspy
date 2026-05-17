@@ -24,82 +24,98 @@ def configurer_driver():
 
 def scraper_fiche_produit(driver, asin):
     url = f"https://www.amazon.fr/dp/{asin}"
-    print(f"-> Scan propre du produit {asin}...")
+    print(f"-> Scan profond et robuste de l'ASIN : {asin}...")
     
     try:
         driver.get(url)
-        time.sleep(4)
+        time.sleep(5) # Un peu plus de temps pour le scaling
         soup = BeautifulSoup(driver.page_source, "html.parser")
         
-        # 1. Extraction et nettoyage de la Marque
+        # 1. Extraction Multi-Sélecteurs de la MARQUE
         brand = "Inconnu"
-        brand_el = soup.select_one("#bylineInfo")
-        if brand_el:
-            brand_raw = brand_el.text
-            # Nettoyage des variantes textuelles d'Amazon
-            brand_raw = re.sub(r"(Visitez la boutique|Marque\s*:|Brand\s*:)", "", brand_raw, flags=re.IGNORECASE)
-            brand = brand_raw.strip()
+        brand_selectors = ["#bylineInfo", "#brand", "#amzn-byline-brand-", "a#bylineInfo"]
+        for sel in brand_selectors:
+            el = soup.select_one(sel)
+            if el and el.text.strip():
+                brand = el.text.strip()
+                break
+        brand = re.sub(r"(Visitez la boutique|Marque\s*:|Brand\s*:)", "", brand, flags=re.IGNORECASE).strip()
         
-        # 2. Extraction et nettoyage de la Note (juste le chiffre)
+        # 2. Extraction Multi-Sélecteurs de la NOTE
         rating = "Pas de note"
-        rating_el = soup.select_one("span.a-icon-alt")
-        if rating_el:
-            rating_match = re.search(r"([0-9][,.]?[0-9]?)", rating_el.text)
-            if rating_match:
-                rating = rating_match.group(1).replace(",", ".")
+        rating_selectors = ["span.a-icon-alt", "#acrPopover title", "i.a-icon-star span"]
+        for sel in rating_selectors:
+            el = soup.select_one(sel)
+            if el:
+                rating_match = re.search(r"([0-9][,.]?[0-9]?)", el.text)
+                if rating_match:
+                    rating = rating_match.group(1).replace(",", ".")
+                    break
         
-        # 3. Extraction et nettoyage du Nombre d'avis (0 si vide, pas de parenthèses)
+        # 3. Extraction Multi-Sélecteurs des AVIS
         reviews = "0"
-        reviews_el = soup.select_one("#acrCustomerReviewText")
-        if reviews_el:
-            reviews_raw = reviews_el.text
-            reviews_clean = re.sub(r"[() \s,.]", "", reviews_raw) # Enlève parenthèses, espaces, virgules
-            reviews_match = re.search(r"(\d+)", reviews_clean)
-            if reviews_match:
-                reviews = reviews_match.group(1)
+        reviews_selectors = ["#acrCustomerReviewText", "span#acrCustomerReviewText", "a._cDE42_links_1b_7b"]
+        for sel in reviews_selectors:
+            el = soup.select_one(sel)
+            if el and el.text.strip():
+                reviews_raw = el.text
+                reviews_clean = re.sub(r"[() \s,.]", "", reviews_raw)
+                reviews_match = re.search(r"(\d+)", reviews_clean)
+                if reviews_match:
+                    reviews = reviews_match.group(1)
+                    break
         
-        # 4. Séparation des Bullet Points (1 par colonne, max 5)
+        # 4. Bullet Points (Sécurisés)
         bullets_list = [li.text.strip() for li in soup.select("#feature-bullets ul li span.a-list-item")]
-        # On s'assure d'avoir au moins 5 éléments dans la liste, même vides
+        if not bullets_list:
+            bullets_list = [span.text.strip() for span in soup.select("div#feature-bullets span.a-list-item")]
         while len(bullets_list) < 5:
             bullets_list.append("")
         
         # 5. Nombre d'images
-        images = set([img['src'] for img in soup.select("#altImages img") if "src" in img.attrs and ("overlay" not in img['src'])])
+        images = set([img['src'] for img in soup.select("#altImages img, #landingImage") if "src" in img.attrs and ("overlay" not in img['src'])])
         nb_images = len(images) if images else 1
         
         # 6. Description
-        desc_el = soup.select_one("#productDescription")
+        desc_el = soup.select_one("#productDescription, div#productDescription_feature_div")
         desc = desc_el.text.strip() if desc_el else "Aucune description"
         
-        # 7. Caractéristiques produits (Tableau technique)
+        # 7. Caractéristiques techniques (Scraping du tableau ET des puces de détails)
         specs = {}
-        for row in soup.select("#prodDetails table tr, #detailBullets_feature_div li"):
-            th = row.select_one("th, span.a-text-bold")
-            td = row.select_one("td, span:not(.a-text-bold)")
+        for row in soup.select("#prodDetails table tr, #detailBullets_feature_div li, #productDetails_techSpec_section_1 tr"):
+            th = row.select_one("th, span.a-text-bold, td.label")
+            td = row.select_one("td, span:not(.a-text-bold), td.value")
             if th and td:
-                k = th.text.replace(":", "").strip()
+                k = th.text.replace(":", "").replace("›", "").strip()
                 v = td.text.strip()
-                if k and v:
+                if k and v and len(k) < 50: # Évite d'attraper des paragraphes entiers
                     specs[k] = v
         specs_str = str(specs) if specs else "Aucune caractéristique"
         
-        # 8. RECHERCHE ULTRA-ROBUSTE DU BSR
+        # 8. Recherche Algorithmique du BSR (Indispensable pour le Scaling)
         bsr_text = "Non trouvé"
-        # Méthode A : Dans le texte global de la page (le plus fréquent)
         page_text = soup.get_text()
-        bsr_match = re.search(r"Classement des meilleures ventes d'Amazon[\s\S]*?#([0-9\s,.]+) en", page_text, re.IGNORECASE)
-        if bsr_match:
-            bsr_text = f"#{bsr_match.group(1).strip()}"
-        else:
-            # Méthode B : Dans le dictionnaire des caractéristiques qu'on vient de scanner
+        # Test de plusieurs expressions régulières (Regex) utilisées par Amazon France
+        patterns = [
+            r"Classement des meilleures ventes d'Amazon[\s\S]*?#([0-9\s,.]+) en",
+            r"N°([0-9\s,.]+) dans High-Tech",
+            r"N°([0-9\s,.]+) en",
+            r"Classement des meilleures ventes[\s\S]*?#([0-9\s,.]+)"
+        ]
+        for pattern in patterns:
+            bsr_match = re.search(pattern, page_text, re.IGNORECASE)
+            if bsr_match:
+                bsr_text = f"#{bsr_match.group(1).replace(' ', '').strip()}"
+                break
+        
+        if bsr_text == "Non trouvé":
             for key, val in specs.items():
-                if "Classement des meilleures ventes" in key or "Classement" in key:
+                if "Classement" in key or "Ventes" in key:
                     bsr_text = val
                     break
 
-        # 9. Déclinaisons (Variantes)
-        variants = [el.text.strip() for el in soup.select("#twister ul li span.a-button-text")]
+        # 9. Déclinaisons
+        variants = [el.text.strip() for el in soup.select("#twister ul li span.a-button-text, div.inline-twister-row span.a-size-base")]
         nb_variants = len(variants)
         variants_str = ", ".join(variants) if variants else "Aucune déclinaison"
 
@@ -123,35 +139,37 @@ def scraper_fiche_produit(driver, asin):
         }
         
     except Exception as e:
-        print(f"Erreur lors du scan de {asin} : {e}")
+        print(f"Erreur sur l'ASIN {asin} : {e}")
         return None
 
 def executer_phase_2():
     chemin_fichier = os.path.join(os.getcwd(), NOM_FICHIER_CENTRAL)
     if not os.path.exists(chemin_fichier):
-        print("Erreur : Le fichier historique_bestsellers.xlsx n'existe pas encore.")
+        print("Erreur : Fichier Excel introuvable.")
         return
 
     df_fiches = pd.read_excel(chemin_fichier, sheet_name="Fiches_Produits")
     df_clst = pd.read_excel(chemin_fichier, sheet_name="Suivi_Classement")
     
-    # On supprime la colonne Titre_Complet si elle traîne encore dans l'historique
+    # Nettoyage des colonnes obsolètes pour restructurer proprement
     if "Titre_Complet" in df_fiches.columns:
         df_fiches = df_fiches.drop(columns=["Titre_Complet"])
+    if "Attributs" in df_fiches.columns:
+        df_fiches = df_fiches.drop(columns=["Attributs"])
 
-    # Identification des lignes à scanner
+    # On cible les fiches vides ou jamais analysées
     if "Note" not in df_fiches.columns:
         asins_a_scanner = df_fiches["ASIN"].tolist()
     else:
-        asins_a_scanner = df_fiches[df_fiches["Marque"] == "À collecter en Phase 2"]["ASIN"].tolist()
+        asins_a_scanner = df_fiches[(df_fiches["Marque"] == "À collecter en Phase 2") | (df_fiches["Marque"] == "Inconnu") | (df_fiches["Note"].isna())]["ASIN"].tolist()
 
     if not asins_a_scanner:
-        print("Tous les produits sont déjà nettoyés et analysés ! Ras.")
+        print("Tous les produits sont parfaitement à jour. Aucun scan requis.")
         return
 
-    # Lot de 15 pour rester sous le radar d'Amazon
-    asins_a_scanner = asins_a_scanner[:15]
-    print(f"Lancement du nettoyage profond sur {len(asins_a_scanner)} produits...")
+    # On monte le lot à 20 produits par session pour accélérer le scaling
+    asins_a_scanner = asins_a_scanner[:20]
+    print(f"Scaling : Analyse de {len(asins_a_scanner)} fiches produits avec l'algorithme de secours...")
 
     driver = configurer_driver()
     resultats = []
@@ -161,25 +179,23 @@ def executer_phase_2():
             info = scraper_fiche_produit(driver, asin)
             if info:
                 resultats.append(info)
-            time.sleep(3)
+            time.sleep(4)
     finally:
         driver.quit()
 
     if resultats:
-        # Application des modifications dans le tableau Excel
         for res in resultats:
             asin = res["ASIN"]
             for col in res.keys():
                 df_fiches.loc[df_fiches["ASIN"] == asin, col] = res[col]
 
-        # Ré-écriture propre dans les deux onglets Excel
         with pd.ExcelWriter(chemin_fichier, engine="openpyxl") as writer:
             df_clst.to_excel(writer, sheet_name="Suivi_Classement", index=False)
             df_fiches.to_excel(writer, sheet_name="Fiches_Produits", index=False)
             
-        print("Mise à jour et nettoyage de l'onglet 'Fiches_Produits' terminés avec succès !")
+        print("Fichier Excel optimisé et mis à jour !")
     else:
-        print("Aucune donnée collectée.")
+        print("Aucune donnée récoltée.")
 
 if __name__ == "__main__":
     executer_phase_2()
