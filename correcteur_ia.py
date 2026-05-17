@@ -8,9 +8,10 @@ def verifier_coherence_donnees():
     chemin_fichier = os.path.join(os.getcwd(), NOM_FICHIER_CENTRAL)
     
     if not os.path.exists(chemin_fichier):
+        print("❌ Fichier Excel introuvable.")
         return
 
-    # Si le fichier d'alerte existe déjà (généré par le captcha), on s'arrête là pour le traiter
+    # Si le fichier d'alerte existe déjà (généré par le captcha), on laisse faire l'étape suivante
     if os.path.exists("alerte_ia.txt"):
         print("⚠️ [IA] Un blocage de sécurité en amont a déjà été identifié.")
         return
@@ -36,7 +37,7 @@ def verifier_coherence_donnees():
             })
 
     if anomalies:
-        print(f"⚠️ [IA] {len(anomalies)} produit(s) non conforme(s).")
+        print(f"⚠️ [IA] {len(anomalies)} produit(s) non conforme(s). Génération du fichier d'alerte.")
         with open("alerte_ia.txt", "w", encoding="utf-8") as f:
             f.write(f"ASIN CIBLE : {anomalies[0]['ASIN']}\n")
             f.write(f"ANOMALIE DETECTEE : {anomalies[0]['Erreurs']}\n")
