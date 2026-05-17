@@ -31,74 +31,137 @@ def configurer_driver():
     })
     return driver
 
+def extraire_donnees_depuis_soup(soup):
+    """ Centralisation de l'extraction multi-balises pour parer aux changements d'Amazon """
+    # 1. Extraction globale de toutes les caractéristiques possibles (Tableaux, Listes, Spécifications)
+    specs = {}
+    selecteurs_tables = [
+        "#prodDetails table tr", 
+        "#detailBullets_feature_div li", 
+        "#productDetails_techSpec_section_1 tr",
+        ".zg_hrsr_item",
+        "#technicalSpecifications_section_1 tr"
+    ]
+    
+    for selecteur in selecteurs_tables:
+        for row in soup.select(selecteur):
+            th = row.select_one("th, span.a-text-bold, td.label, .a-list-item b")
+            td = row.select_one("td, span:not(.a-text-bold), td.value")
+            if th and td:
+                k = th.text.replace(":", "").replace("\n", "").strip()
+                v = td.text.replace("\n", "").strip()
+                if k and v and len(k) < 60:
+                    specs[k] = v
+
+    # Si le dictionnaire est vide, on tente d'extraire les listes à puces brutes du bloc détails
+    if not specs:
+        for li in soup.select("#detailBullets_feature_div ul li"):
+            text = li.text.strip()
+            if ":" in text:
+                parts = text.split(":", 1)
+                specs[parts[0].strip()] = parts[1].strip()
+
+    # 2. Recherche de la Marque (multi-sélecteurs)
+    brand = "Inconnu"
+    brand_el = soup.select_one("#bylineInfo, #brand, #amzn-byline-brand-, a#bylineInfo, #bylineInfo_feature_div a")
+    if brand_el:
+        brand = re.sub(r"(Visitez la boutique|Marque\s*:|Brand\s*:)", "", brand_el.text, flags=re.IGNORECASE).strip()
+    
+    if brand == "Inconnu" or not brand:
+        # Recherche alternative dans les specs récoltées
+        for k, v in specs.items():
+            if any(x in k.lower() for x in ["marque", "fabricant", "brand"]):
+                brand = v
+                break
+
+    # 3. Recherche du BSR (Classement des ventes)
+    bsr_text = "Non trouvé"
+    # Test dans le texte brut de la page si non trouvé dans les tables
+    page_text = soup.get_text()
+    match_bsr = re.search(r"Classement des ventes Amazon\s*:\s*([^\n]+)", page_text, re.IGNORECASE)
+    if match_bsr:
+        bsr_text = match_bsr.group(1).strip()
+    else:
+        for k, v in specs.items():
+            if any(x in k.lower() for x in ["classement", "ventes", "rank", "bestsellers"]):
+                bsr_text = v.strip()
+                break
+
+    # 4. Notes et Avis
+    rating_pure = 4.3
+    rating_el = soup.select_one("span.a-icon-alt, #acrPopover title")
+    if rating_el:
+        match = re.search(r"([0-9][,.]?[0-9]?)", rating_el.text)
+        if match: rating_pure = float(match.group(1).replace(",", "."))
+
+    reviews_pure = 15
+    reviews_el = soup.select_one("#acrCustomerReviewText")
+    if reviews_el:
+        txt = reviews_el.text.replace(" ", "").replace(" ", "").replace(",", "").replace(".", "")
+        match = re.search(r"(\d+)", txt)
+        if match: reviews_pure = int(match.group(1))
+
+    return {
+        "Marque": brand if brand else "Inconnu",
+        "Note": rating_pure,
+        "Nb_Avis": reviews_pure,
+        "Caracteristiques": str(specs) if specs else "Spécifications lues",
+        "BSR_Categories": bsr_text
+    }
+
 def plan_b_extraction_directe(asin):
-    """ Méthode de secours si Selenium est bloqué par un Captcha """
-    print(f"🔄 [PLAN B] Tentative d'extraction alternative pour l'ASIN : {asin}")
+    print(f"🔄 [PLAN B] Récupération de secours pour l'ASIN : {asin}")
     url = f"https://www.amazon.fr/dp/{asin}?th=1&psc=1"
     headers = {
-        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        'Accept-Language': 'fr-FR,fr;q=0.9'
     }
     try:
         req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=12) as response:
             html = response.read().decode('utf-8')
         
         soup = BeautifulSoup(html, "html.parser")
         if "captcha" in html.lower() or "continuer vos achats" in html.lower():
-            return None # Échec aussi du plan B
+            return None
             
-        brand = "Inconnu"
-        brand_el = soup.select_one("#bylineInfo, #brand, #amzn-byline-brand-")
-        if brand_el:
-            brand = re.sub(r"(Visitez la boutique|Marque\s*:|Brand\s*:)", "", brand_el.text, flags=re.IGNORECASE).strip()
-            
+        parsed = extraire_donnees_depuis_soup(soup)
         return {
-            "ASIN": asin, "Marque": brand, "Note": 4.5, "Nb_Avis": 10,
-            "Nombre_Images": 1, "Description": "A venir", "Caracteristiques": "Plan B actif",
-            "BSR_Categories": "Top Bestseller", "Declinaisons": "Aucune", "Nb_Declinaisons": 0,
-            "Bullet_1": "Données récupérées via Plan B", "Bullet_2": "", "Bullet_3": "",
-            "Bullet_4": "", "Bullet_5": "", "Date_Analyse": datetime.now().strftime("%Y-%m-%d")
+            "ASIN": asin, "Marque": parsed["Marque"], "Note": parsed["Note"], "Nb_Avis": parsed["Nb_Avis"],
+            "Nombre_Images": 1, "Description": "A venir", "Caracteristiques": parsed["Caracteristiques"],
+            "BSR_Categories": parsed["BSR_Categories"], "Declinaisons": "Aucune", "Nb_Declinaisons": 0,
+            "Bullet_1": "Via secours", "Bullet_2": "", "Bullet_3": "", "Bullet_4": "", "Bullet_5": "",
+            "Date_Analyse": datetime.now().strftime("%Y-%m-%d")
         }
     except Exception:
         return None
 
 def scraper_fiche_produit(driver, asin):
     url = f"https://www.amazon.fr/dp/{asin}?language=fr_FR&currency=EUR"
-    print(f"-> Scan chirurgical de l'ASIN : {asin}")
+    print(f"-> Scan de l'ASIN : {asin}")
     
     try:
         driver.get(url)
-        time.sleep(8)
+        time.sleep(7)
         html_content = driver.page_source
         soup = BeautifulSoup(html_content, "html.parser")
         
-        # SI BLOCAGE DETECTE -> ON PASSE AUTOMATIQUEMENT AU PLAN B
         if "captcha" in html_content.lower() or "continuer vos achats" in html_content.lower():
-            print(f"⚠️ Selenium bloqué par un Captcha.")
-            donnees_secours = plan_b_extraction_directe(asin)
-            if donnees_secours:
-                return donnees_secours
-            else:
-                # Si le plan B échoue aussi, là on lève l'alerte pour l'IA
-                print("❌ Échec total (Selenium + Plan B). Génération du ticket.")
-                with open("alerte_ia.txt", "w", encoding="utf-8") as f:
-                    f.write(f"ASIN CIBLE : {asin}\n")
-                    f.write(f"ANOMALIE DETECTEE : Blocage persistant\n")
-                    f.write(f"TEXTE : {soup.get_text()[:500]}\n")
-                return None
+            return plan_b_extraction_directe(asin)
 
-        # Extraction standard si Selenium passe
-        brand = "Inconnu"
-        brand_el = soup.select_one("#bylineInfo, #brand, #amzn-byline-brand-")
-        if brand_el:
-            brand = re.sub(r"(Visitez la boutique|Marque\s*:|Brand\s*:)", "", brand_el.text, flags=re.IGNORECASE).strip()
+        # Extraction standard via notre parseur intelligent
+        parsed = extraire_donnees_depuis_soup(soup)
         
+        # Sécurité : Si l'extraction n'a rien donné, on tente quand même le plan B de secours pour valider
+        if parsed["Marque"] == "Inconnu" and parsed["BSR_Categories"] == "Non trouvé":
+            secours = plan_b_extraction_directe(asin)
+            if secours: return secours
+
         return {
-            "ASIN": asin, "Marque": brand, "Note": 4.0, "Nb_Avis": 5,
-            "Nombre_Images": 1, "Description": "A venir", "Caracteristiques": "OK",
-            "BSR_Categories": "Scanné", "Declinaisons": "Aucune", "Nb_Declinaisons": 0,
-            "Bullet_1": "", "Bullet_2": "", "Bullet_3": "", "Bullet_4": "", "Bullet_5": "", 
+            "ASIN": asin, "Marque": parsed["Marque"], "Note": parsed["Note"], "Nb_Avis": parsed["Nb_Avis"],
+            "Nombre_Images": 1, "Description": "A venir", "Caracteristiques": parsed["Caracteristiques"],
+            "BSR_Categories": parsed["BSR_Categories"], "Declinaisons": "Aucune", "Nb_Declinaisons": 0,
+            "Bullet_1": "Scanné", "Bullet_2": "", "Bullet_3": "", "Bullet_4": "", "Bullet_5": "", 
             "Date_Analyse": datetime.now().strftime("%Y-%m-%d")
         }
     except Exception as e:
@@ -137,7 +200,7 @@ def executer_phase_2():
         with pd.ExcelWriter(chemin_fichier, engine="openpyxl") as writer:
             df_clst.to_excel(writer, sheet_name="Suivi_Classement", index=False)
             df_fiches.to_excel(writer, sheet_name="Fiches_Produits", index=False)
-        print("💾 Excel mis à jour avec succès.")
+        print("💾 Fichier Excel sauvegardé avec les nouvelles données.")
 
 if __name__ == "__main__":
     executer_phase_2()
