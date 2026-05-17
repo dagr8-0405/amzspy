@@ -25,7 +25,7 @@ jobs:
     - name: Installer Google Chrome et les dépendances système
       run: |
         sudo apt-get update
-        sudo apt-get install -y wget curl unzip libxi6 libgconf-2-4 libnss3
+        sudo apt-get install -y wget curl unzip libxi6 libnss3
         
     - name: Installer les bibliothèques Python
       run: |
