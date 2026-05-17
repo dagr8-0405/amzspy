@@ -1,47 +1,70 @@
-name: Robot Amazon Quotidien
+name: Robot Amazon BestSellers & Auto-Correction IA
 
 on:
   schedule:
-    - cron: '0 6 * * *'
-  workflow_dispatch:
+    - cron: '0 7 * * *' # Tourne tous les matins à 7h
+  workflow_dispatch: # Te permet de le lancer à la main
 
 jobs:
   run-scraper:
     runs-on: ubuntu-latest
-    steps:
-    - name: Récupérer le code du robot
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
 
-    - name: Installer Python
-      uses: actions/setup-python@v5
+    steps:
+    - name: Récupérer le code du dépôt
+      uses: actions/checkout@v3
+
+    - name: Configurer Python
+      uses: actions/setup-python@v4
       with:
         python-version: '3.10'
 
-    - name: Installer Google Chrome et son Driver automatiquement
-      uses: browser-actions/setup-chrome@v1.7.2
-      with:
-        chrome-version: stable
-
-    - name: Installer les extensions Python
+    - name: Installer Google Chrome et les dépendances système
       run: |
-        pip install requests beautifulsoup4 pandas openpyxl selenium webdriver-manager
+        sudo apt-get update
+        sudo apt-get install -y wget curl unzip libxi6 libgconf-2-4 libnss3
+        
+    - name: Installer les bibliothèques Python
+      run: |
+        pip install pandas openpyxl beautifulsoup4 selenium webdriver-manager
 
-    - name: Lancer la Phase 1 (Classement des 100 Bestsellers)
+    - name: Étape 1 - Extraction du Classement (robot.py)
       run: python robot.py
 
-    - name: Lancer la Phase 2 (Aspiration profonde des fiches produits)
+    - name: Étape 2 - Enrichissement des Fiches Produits (details_produits.py)
       run: python details_produits.py
 
-    - name: Sauvegarder le fichier Excel sur GitHub
-      env:
-        FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    - name: Étape 3 - Audit de lisibilité des données (correcteur_ia.py)
+      run: python correcteur_ia.py
+
+    - name: Étape 4 - Enregistrement des données dans GitHub
       run: |
-        git config --global user.name 'Robot Amazon'
-        git config --global user.email 'bot@amazon.com'
-        git config --global core.autocrlf false
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
         git add historique_bestsellers.xlsx
-        git commit -m "Mise à jour automatique des Bestsellers et Fiches Produits" || exit 0
-        BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
-        git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git $BRANCH_NAME --force
+        git commit -m "Mise à jour des données et du nettoyage [Automatique]" || echo "Aucun changement dans l'Excel"
+        git push
+
+    - name: Étape 5 - Déclenchement de l'Auto-Correction (Si anomalie)
+      id: check_file
+      run: |
+        if [ -f alerte_ia.txt ]; then
+          echo "ANOMALIE_DETECTEE=true" >> $GITHUB_ENV
+        else
+          echo "ANOMALIE_DETECTEE=false" >> $GITHUB_ENV
+        fi
+
+    - name: Étape 6 - Ouverture du ticket de réparation pour l'IA
+      if: env.ANOMALIE_DETECTEE == 'true'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          const contenuAlerte = fs.readFileSync('alerte_ia.txt', 'utf8');
+          
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: '🚨 [IA AUTOCORRECTION] Échec de parsing sur les données Amazon',
+            body: contenuAlerte,
+            labels: ['auto-correction']
+          });
