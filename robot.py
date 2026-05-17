@@ -13,9 +13,9 @@ URL = "https://www.amazon.fr/gp/bestsellers/electronics/15855785031/"
 NOM_FICHIER_CENTRAL = "historique_bestsellers.xlsx"
 
 
-def scraper_amazon_centralise():
+def scraper_amazon_onglets():
     print(
-        f"[{datetime.now().strftime('%H:%M:%S')}] Lancement du navigateur sécurisé..."
+        f"[{datetime.now().strftime('%H:%M:%S')}] Lancement du navigateur sécurisé (Mode Double Onglet)..."
     )
 
     chrome_options = Options()
@@ -47,14 +47,13 @@ def scraper_amazon_centralise():
     finally:
         driver.quit()
 
-    liste_produits = []
+    liste_classement = []
+    liste_produits_uniques = []
     elements = soup.select(
         "div[id^='p13n-asin-index-'], div.p13n-grid-content, div.zg-grid-general-faceout, li.zg-item-immersion"
     )
 
-    print(
-        f"Analyse en cours de {len(elements)} emplacements trouvés sur la page..."
-    )
+    print(f"Analyse de {len(elements)} emplacements...")
 
     for index, el in enumerate(elements, 1):
         try:
@@ -96,9 +95,8 @@ def scraper_amazon_centralise():
                 if alt_price:
                     price = alt_price.text.strip()
 
-            # 4. EXTRACTION DE L'ASIN (L'identifiant produit indispensable pour la suite)
+            # 4. Extraction de l'ASIN
             asin = "Inconnu"
-            # On cherche l'ASIN dans les liens du produit
             link_el = el.select_one("a[href*='/dp/'], a[href*='/gp/product/']")
             if link_el and "href" in link_el.attrs:
                 href = link_el["href"]
@@ -108,49 +106,91 @@ def scraper_amazon_centralise():
                 if asin_match:
                     asin = asin_match.group(1)
 
-            if title and title != "Titre inconnu" and "€" not in title:
-                liste_produits.append(
+            if title and title != "Titre inconnu" and "€" not in title and asin != "Inconnu":
+                # Données pour l'onglet Classement
+                liste_classement.append(
                     {
                         "Date": datetime.now().strftime("%Y-%m-%d"),
                         "Classement": rank,
                         "ASIN": asin,
-                        "Titre": title,
                         "Prix": price,
+                    }
+                )
+                # Données temporaires pour l'onglet Fiches Produits
+                liste_produits_uniques.append(
+                    {
+                        "ASIN": asin,
+                        "Titre": title,
+                        "Marque": "À collecter en Phase 2",
+                        "Description": "À collecter en Phase 2",
+                        "Attributs": "À collecter en Phase 2",
+                        "Date_Detection": datetime.now().strftime("%Y-%m-%d"),
                     }
                 )
         except Exception:
             continue
 
-    if liste_produits:
-        df_nouveau = pd.DataFrame(liste_produits)
-        df_nouveau["numeric_rank"] = (
-            df_nouveau["Classement"].str.extract(r"(\d+)").astype(float)
+    if liste_classement:
+        # Nettoyage du classement du jour
+        df_nouveau_clst = pd.DataFrame(liste_classement)
+        df_nouveau_clst["numeric_rank"] = (
+            df_nouveau_clst["Classement"].str.extract(r"(\d+)").astype(float)
         )
-        df_nouveau = df_nouveau.drop_duplicates(subset=["numeric_rank"])
-        df_nouveau = df_nouveau.sort_values(by="numeric_rank")
-        df_nouveau["Classement"] = df_nouveau["numeric_rank"].apply(
+        df_nouveau_clst = df_nouveau_clst.drop_duplicates(
+            subset=["numeric_rank"]
+        )
+        df_nouveau_clst = df_nouveau_clst.sort_values(by="numeric_rank")
+        df_nouveau_clst["Classement"] = df_nouveau_clst["numeric_rank"].apply(
             lambda x: f"#{int(x)}" if pd.notnull(x) else ""
         )
-        df_nouveau = df_nouveau.drop(columns=["numeric_rank"])
+        df_nouveau_clst = df_nouveau_clst.drop(columns=["numeric_rank"])
 
-        # GESTION DU FICHIER UNIQUE : On ajoute à l'existant sans écraser
+        df_nouvelles_fiches = pd.DataFrame(liste_produits_uniques).drop_duplicates(subset=["ASIN"])
+
         chemin_fichier = os.path.join(os.getcwd(), NOM_FICHIER_CENTRAL)
 
+        # Chargement de l'existant ou création
         if os.path.exists(chemin_fichier):
-            # Si le fichier existe déjà, on charge l'ancien et on colle le nouveau en dessous
-            df_ancien = pd.read_excel(chemin_fichier)
-            df_final = pd.concat([df_ancien, df_nouveau], ignore_index=True)
-            print(f"Fichier central complété. Total : {len(df_final)} lignes.")
-        else:
-            # Sinon, on crée le tout premier bloc
-            df_final = df_nouveau
-            print(f"Création du fichier central initial.")
+            try:
+                df_ancien_clst = pd.read_excel(
+                    chemin_fichier, sheet_name="Suivi_Classement"
+                )
+                df_final_clst = pd.concat(
+                    [df_ancien_clst, df_nouveau_clst], ignore_index=True
+                )
+            except Exception:
+                df_final_clst = df_nouveau_clst
 
-        df_final.to_excel(chemin_fichier, index=False)
-        print(f"Sauvegarde réussie dans '{NOM_FICHIER_CENTRAL}'.")
+            try:
+                df_anciennes_fiches = pd.read_excel(
+                    chemin_fichier, sheet_name="Fiches_Produits"
+                )
+                # Fusion intelligente : On ne garde que les ASINs qui n'existaient pas déjà !
+                df_final_fiches = pd.concat(
+                    [df_anciennes_fiches, df_nouvelles_fiches],
+                    ignore_index=True,
+                ).drop_duplicates(subset=["ASIN"], keep="first")
+            except Exception:
+                df_final_fiches = df_nouvelles_fiches
+        else:
+            df_final_clst = df_nouveau_clst
+            df_final_fiches = df_nouvelles_fiches
+
+        # Écriture dans les deux onglets Excel
+        with pd.ExcelWriter(chemin_fichier, engine="openpyxl") as writer:
+            df_final_clst.to_excel(
+                writer, sheet_name="Suivi_Classement", index=False
+            )
+            df_final_fiches.to_excel(
+                writer, sheet_name="Fiches_Produits", index=False
+            )
+
+        print(
+            f"Sauvegarde réussie dans '{NOM_FICHIER_CENTRAL}' (Structure Double Onglet OK)."
+        )
     else:
         print("Erreur : Aucun produit trouvé.")
 
 
 if __name__ == "__main__":
-    scraper_amazon_centralise()
+    scraper_amazon_onglets()
