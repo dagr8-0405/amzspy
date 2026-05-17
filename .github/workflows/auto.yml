@@ -36,13 +36,14 @@ jobs:
     - name: Lancer le Robot !
       run: python robot.py
 
-    - name: Sauvegarder le fichier Excel sur GitHub
+   - name: Sauvegarder le fichier Excel sur GitHub
       run: |
         git config --global user.name 'Robot Amazon'
         git config --global user.email 'bot@amazon.com'
-        # CORRECTION : On force GitHub à accepter le nouveau format d'onglets Excel
         git config --global core.autocrlf false
         git add historique_bestsellers.xlsx
         git commit -m "Mise à jour automatique des Bestsellers (Onglets)" || exit 0
-        # CORRECTION : On s'assure d'écraser proprement l'ancienne version plate par la version à onglets
-        git push origin main --force
+        
+        # SOLUTION : On détecte automatiquement le nom de ta branche (main ou master)
+        BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
+        git push origin $BRANCH_NAME --force
