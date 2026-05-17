@@ -5,6 +5,10 @@ on:
     - cron: '0 7 * * *' # Tourne tous les matins à 7h
   workflow_dispatch: # Te permet de le lancer à la main
 
+permissions:
+  contents: write
+  issues: write
+  
 jobs:
   run-scraper:
     runs-on: ubuntu-latest
