@@ -10,23 +10,22 @@ jobs:
   run-scraper:
     runs-on: ubuntu-latest
     steps:
-    # Changement ici : passage de @v3 à @v4
     - name: Récupérer le code du robot
       uses: actions/checkout@v4
+      with:
+        # CORRECTION : Permet au robot d'avoir les droits complets sur l'historique du projet
+        fetch-depth: 0
 
-    # Changement ici : passage de @v4 à @v5
     - name: Installer Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
-    # Changement ici : passage de @v1 à @v1.7.2 (compatible Node 24)
     - name: Installer Google Chrome et son Driver automatiquement
       uses: browser-actions/setup-chrome@v1.7.2
       with:
         chrome-version: stable
 
-    # Cette ligne force l'utilisation du nouveau moteur Node 24 pour être tranquille
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -41,6 +40,9 @@ jobs:
       run: |
         git config --global user.name 'Robot Amazon'
         git config --global user.email 'bot@amazon.com'
-        git add *.xlsx
-        git commit -m "Mise à jour automatique des Bestsellers" || exit 0
-        git push origin main
+        # CORRECTION : On force GitHub à accepter le nouveau format d'onglets Excel
+        git config --global core.autocrlf false
+        git add historique_bestsellers.xlsx
+        git commit -m "Mise à jour automatique des Bestsellers (Onglets)" || exit 0
+        # CORRECTION : On s'assure d'écraser proprement l'ancienne version plate par la version à onglets
+        git push origin main --force
