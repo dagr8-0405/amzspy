@@ -1,6 +1,7 @@
-from datetime import datetime
 import os
+import re
 import time
+from datetime import datetime
 import pandas as pd
 from bs4 import BeautifulSoup
 from selenium import webdriver
@@ -8,17 +9,16 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
-# URL cible (Boîtiers Montres Amazon)
 URL = "https://www.amazon.fr/gp/bestsellers/electronics/15855785031/"
+NOM_FICHIER_CENTRAL = "historique_bestsellers.xlsx"
 
 
-def scraper_amazon_cloud():
+def scraper_amazon_centralise():
     print(
-        f"[{datetime.now().strftime('%H:%M:%S')}] Lancement du navigateur sécurisé (Mode Cloud)..."
+        f"[{datetime.now().strftime('%H:%M:%S')}] Lancement du navigateur sécurisé..."
     )
 
     chrome_options = Options()
-    # Configuration indispensable pour tourner sur les serveurs de GitHub sans écran
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
@@ -34,9 +34,8 @@ def scraper_amazon_cloud():
     try:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Connexion à Amazon...")
         driver.get(URL)
-        time.sleep(6)
+        time.sleep(5)
 
-        # Descente très progressive en 5 étapes pour forcer l'affichage des 100 produits
         for i in range(1, 6):
             driver.execute_script(
                 f"window.scrollTo(0, (document.body.scrollHeight / 5) * {i});"
@@ -49,8 +48,6 @@ def scraper_amazon_cloud():
         driver.quit()
 
     liste_produits = []
-
-    # Sélection ultra-large de toutes les boîtes de la grille Amazon (gauche, droite, paires, impaires)
     elements = soup.select(
         "div[id^='p13n-asin-index-'], div.p13n-grid-content, div.zg-grid-general-faceout, li.zg-item-immersion"
     )
@@ -61,7 +58,7 @@ def scraper_amazon_cloud():
 
     for index, el in enumerate(elements, 1):
         try:
-            # 1. Extraction du Rang (Classement)
+            # 1. Extraction du Rang
             rank_el = el.select_one(
                 "span.zg-badge-text, span.p13n-sc-zg-badge-text, span.scr-zg-badge-text"
             )
@@ -75,7 +72,6 @@ def scraper_amazon_cloud():
             if title_el:
                 title = title_el.text.strip()
 
-            # Sécurité anti-bug pour les titres
             if title == "Titre inconnu" or title == "Regarder" or "€" in title:
                 for target in el.select("span, div, a"):
                     txt = target.text.strip()
@@ -88,7 +84,7 @@ def scraper_amazon_cloud():
                         title = txt
                         break
 
-            # 3. Extraction du Prix (Sélecteur universel)
+            # 3. Extraction du Prix
             price = "Non communiqué"
             price_el = el.select_one("span.a-offscreen")
             if price_el:
@@ -100,12 +96,24 @@ def scraper_amazon_cloud():
                 if alt_price:
                     price = alt_price.text.strip()
 
-            # On valide la ligne si le titre est cohérent
+            # 4. EXTRACTION DE L'ASIN (L'identifiant produit indispensable pour la suite)
+            asin = "Inconnu"
+            # On cherche l'ASIN dans les liens du produit
+            link_el = el.select_one("a[href*='/dp/'], a[href*='/gp/product/']")
+            if link_el and "href" in link_el.attrs:
+                href = link_el["href"]
+                asin_match = re.search(r"/dp/([A-Z0-9]{10})", href)
+                if not asin_match:
+                    asin_match = re.search(r"/gp/product/([A-Z0-9]{10})", href)
+                if asin_match:
+                    asin = asin_match.group(1)
+
             if title and title != "Titre inconnu" and "€" not in title:
                 liste_produits.append(
                     {
                         "Date": datetime.now().strftime("%Y-%m-%d"),
                         "Classement": rank,
+                        "ASIN": asin,
                         "Titre": title,
                         "Prix": price,
                     }
@@ -113,38 +121,36 @@ def scraper_amazon_cloud():
         except Exception:
             continue
 
-    # Traitement et mise en forme du tableau final
     if liste_produits:
-        df = pd.DataFrame(liste_produits)
-
-        # Nettoyage et extraction du numéro du classement
-        df["numeric_rank"] = (
-            df["Classement"].str.extract(r"(\d+)").astype(float)
+        df_nouveau = pd.DataFrame(liste_produits)
+        df_nouveau["numeric_rank"] = (
+            df_nouveau["Classement"].str.extract(r"(\d+)").astype(float)
         )
-
-        # Suppression des doublons de place
-        df = df.drop_duplicates(subset=["numeric_rank"])
-
-        # Tri mathématique parfait (1, 2, 3, 4...)
-        df = df.sort_values(by="numeric_rank")
-
-        # Reconstruction propre de la colonne Classement (ex: #1, #2, #3...)
-        df["Classement"] = df["numeric_rank"].apply(
+        df_nouveau = df_nouveau.drop_duplicates(subset=["numeric_rank"])
+        df_nouveau = df_nouveau.sort_values(by="numeric_rank")
+        df_nouveau["Classement"] = df_nouveau["numeric_rank"].apply(
             lambda x: f"#{int(x)}" if pd.notnull(x) else ""
         )
-        df = df.drop(columns=["numeric_rank"])
+        df_nouveau = df_nouveau.drop(columns=["numeric_rank"])
 
-        # Création du fichier Excel avec la date du jour
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        nom_fichier = f"amazon_bestsellers_{date_str}.xlsx"
+        # GESTION DU FICHIER UNIQUE : On ajoute à l'existant sans écraser
+        chemin_fichier = os.path.join(os.getcwd(), NOM_FICHIER_CENTRAL)
 
-        df.to_excel(os.path.join(os.getcwd(), nom_fichier), index=False)
-        print(
-            f"Succès total ! Le fichier '{nom_fichier}' a été créé dans le cloud sans aucune perte."
-        )
+        if os.path.exists(chemin_fichier):
+            # Si le fichier existe déjà, on charge l'ancien et on colle le nouveau en dessous
+            df_ancien = pd.read_excel(chemin_fichier)
+            df_final = pd.concat([df_ancien, df_nouveau], ignore_index=True)
+            print(f"Fichier central complété. Total : {len(df_final)} lignes.")
+        else:
+            # Sinon, on crée le tout premier bloc
+            df_final = df_nouveau
+            print(f"Création du fichier central initial.")
+
+        df_final.to_excel(chemin_fichier, index=False)
+        print(f"Sauvegarde réussie dans '{NOM_FICHIER_CENTRAL}'.")
     else:
         print("Erreur : Aucun produit trouvé.")
 
 
 if __name__ == "__main__":
-    scraper_amazon_cloud()
+    scraper_amazon_centralise()
