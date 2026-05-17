@@ -61,6 +61,7 @@ jobs:
       if: env.ANOMALIE_DETECTEE == 'true'
       uses: actions/github-script@v6
       with:
+        github-token: ${{ secrets.CLE_GITHUB_IA }} # ⬅️ LAISSE EXACTEMENT ÇA
         script: |
           const fs = require('fs');
           const contenuAlerte = fs.readFileSync('alerte_ia.txt', 'utf8');
