@@ -10,19 +10,25 @@ jobs:
   run-scraper:
     runs-on: ubuntu-latest
     steps:
+    # Changement ici : passage de @v3 à @v4
     - name: Récupérer le code du robot
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
+    # Changement ici : passage de @v4 à @v5
     - name: Installer Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
-    # SOLUTION : Utilisation de l'outil officiel pour installer Chrome proprement
+    # Changement ici : passage de @v1 à @v1.7.2 (compatible Node 24)
     - name: Installer Google Chrome et son Driver automatiquement
-      uses: browser-actions/setup-chrome@v1
+      uses: browser-actions/setup-chrome@v1.7.2
       with:
         chrome-version: stable
+
+    # Cette ligne force l'utilisation du nouveau moteur Node 24 pour être tranquille
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     - name: Installer les extensions Python
       run: |
